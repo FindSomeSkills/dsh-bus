@@ -118,3 +118,14 @@ node --test test/bus.test.mjs
 ## 许可
 
 MIT
+
+## 仓库历史规则
+
+发布脚本只做「克隆 → 覆盖文件 → 普通 commit → push」，**不 force push、不重建仓库**。远端历史保持线性，任何已经克隆过的机器 `git pull` 都应该快进。
+
+如果你的本地副本因为早期版本被强制推送过而卡在分叉上，对齐一次即可：
+
+```bash
+git -C ~/dsh-bus fetch origin
+git -C ~/dsh-bus reset --hard origin/main
+```
