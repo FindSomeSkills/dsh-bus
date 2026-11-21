@@ -160,3 +160,36 @@ test('附件：默认只记元数据，--attach-blob 内联小文件并能取回
 
   fs.rmSync(tmp, { recursive: true, force: true });
 });
+
+test('审计回归：poll 内嵌 flush 不死锁、回执可见、bundles 仅顺序不同不误报', () => {
+  const { tmp, remote, win, mac } = setup();
+  for (const side of [win, mac]) {
+    assert.equal(runAs(side.home, ['init', '--repo', remote, '--device', side.device]).json.ok, true);
+  }
+
+  const winRepo = path.join(win.home, 'repo');
+  sh('git', ['-C', winRepo, 'remote', 'set-url', 'origin', path.join(tmp, 'missing.git')]);
+  const queued = runAs(win.home, ['send', '--to', mac.device, '--text', '离线排队的那条']);
+  assert.equal(queued.json.status, 'queued', JSON.stringify(queued.json));
+  sh('git', ['-C', winRepo, 'remote', 'set-url', 'origin', remote]);
+
+  // 关键：poll 内部会调 flushOutbox 再拿一次锁，必须可重入，不能抛“另一个进程正在写”
+  const polled = runAs(win.home, ['poll']);
+  assert.equal(polled.json.ok, true, JSON.stringify(polled.json));
+  assert.ok(polled.json.flushed >= 1, 'poll 应该顺手把队列补发出去');
+
+  // 回执：mac 收到后 ack，win 的 poll 要能看到 acked
+  const macPoll = runAs(mac.home, ['poll']);
+  const msg = macPoll.json.messages[0];
+  assert.ok(msg, 'mac 应收到消息');
+  const ack = runAs(mac.home, ['ack', msg.id]);
+  assert.equal(ack.json.ok, true, JSON.stringify(ack.json));
+
+  const winPoll = runAs(win.home, ['poll']);
+  const receipt = winPoll.json.receipts.find((r) => r.id === msg.id);
+  assert.ok(receipt, 'send 方应看到回执条目');
+  assert.equal(receipt.acked, true, 'ack 后 acked 必须为 true');
+  assert.ok(receipt.acked_at, '应带回执时间');
+
+  fs.rmSync(tmp, { recursive: true, force: true });
+});

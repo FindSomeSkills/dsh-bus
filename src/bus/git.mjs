@@ -5,6 +5,10 @@ import { spawnSync } from 'node:child_process';
 
 const LOCK = '.git/dsh-bus.lock';
 
+// 同一个进程里可能嵌套加锁（poll 里调 flushOutbox），用深度计数做可重入；
+// 跨进程仍靠锁文件，且只认还活着的 pid。
+const held = new Map();
+
 function run(repo, args, { timeout = 60000 } = {}) {
   const res = spawnSync('git', ['-C', repo, ...args], { encoding: 'utf8', timeout });
   return { ok: res.status === 0, code: res.status, out: (res.stdout || '') + (res.stderr || '') };
@@ -19,7 +23,13 @@ export function ensureRepo(repo, remote, branch = 'main') {
   fs.mkdirSync(path.dirname(repo), { recursive: true });
   const clone = spawnSync('git', ['clone', remote, repo], { encoding: 'utf8', timeout: 120000 });
   if (clone.status !== 0) throw new Error(`git clone 失败：${(clone.stderr || clone.stdout || '').trim()}`);
-  run(repo, ['checkout', branch]);
+  if (!run(repo, ['checkout', branch]).ok) {
+    // 远端默认分支不叫 main 时，跟随它，而不是留在 clone 的悬空 HEAD 上
+    const ref = run(repo, ['rev-parse', '--abbrev-ref', 'origin/HEAD']).out.trim();
+    const fallback = ref.startsWith('origin/') ? ref.slice(7) : '';
+    if (fallback && run(repo, ['checkout', fallback]).ok) return repo;
+    throw new Error(`仓库里既没有 ${branch} 也没有可用的默认分支（origin/HEAD=${ref || '未知'}）`);
+  }
   return repo;
 }
 
@@ -32,6 +42,12 @@ export function ensureIdentity(repo, device = 'dsh-bus') {
 }
 
 export function lock(repo) {
+  const key = path.resolve(repo);
+  if (held.has(key)) {
+    held.set(key, held.get(key) + 1);
+    return () => release(key);
+  }
+
   const file = path.join(repo, LOCK);
   fs.mkdirSync(path.dirname(file), { recursive: true });
   try {
@@ -39,6 +55,7 @@ export function lock(repo) {
   } catch {
     const pid = Number(fs.readFileSync(file, 'utf8').trim());
     const alive = (() => {
+      if (pid === process.pid) return false; // 上次异常退出留下的自家 pid，直接接管
       try {
         process.kill(pid, 0);
         return true;
@@ -49,7 +66,18 @@ export function lock(repo) {
     if (alive) throw new Error(`另一个 dsh-bus 进程正在写（pid ${pid}）`);
     fs.writeFileSync(file, String(process.pid));
   }
-  return () => fs.rmSync(file, { force: true });
+  held.set(key, 1);
+  return () => release(key);
+}
+
+function release(key) {
+  const depth = (held.get(key) ?? 1) - 1;
+  if (depth > 0) {
+    held.set(key, depth);
+    return;
+  }
+  held.delete(key);
+  fs.rmSync(path.join(key, LOCK), { force: true });
 }
 
 export function pull(repo) {

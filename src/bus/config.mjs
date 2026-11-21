@@ -53,5 +53,7 @@ export function writeCursor(device, cursor) {
   fs.mkdirSync(HOME, { recursive: true });
   const all = fs.existsSync(paths.cursor) ? JSON.parse(fs.readFileSync(paths.cursor, 'utf8')) : {};
   all[device] = cursor;
-  fs.writeFileSync(paths.cursor, JSON.stringify(all, null, 2) + '\n');
+  const tmp = `${paths.cursor}.${process.pid}.tmp`;
+  fs.writeFileSync(tmp, JSON.stringify(all, null, 2) + '\n');
+  fs.renameSync(tmp, paths.cursor);
 }

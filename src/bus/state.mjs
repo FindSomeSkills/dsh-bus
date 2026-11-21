@@ -16,22 +16,32 @@ function readJson(file) {
   }
 }
 
-function npmRoot() {
-  const isWin = process.platform === 'win32';
-  const res = spawnSync(isWin ? 'npm.cmd' : 'npm', ['root', '-g'], {
-    encoding: 'utf8',
-    timeout: 20000,
-    shell: isWin,
-  });
-  if (res.status !== 0 || !res.stdout) return null;
-  return res.stdout.trim();
+// 不 shell 出去找 npm：按已知的全局安装根目录挨个试，找不到就返回 null。
+function globalRoots() {
+  const roots = [];
+  if (process.env.DSH_KERNEL_ROOT) roots.push(process.env.DSH_KERNEL_ROOT);
+  if (process.execPath) {
+    // <prefix>/bin/node 或 <prefix>\node.exe → <prefix>/lib/node_modules（POSIX）
+    const prefix = path.dirname(process.execPath);
+    roots.push(path.join(prefix, '..', 'lib', 'node_modules'));
+    roots.push(prefix);
+  }
+  if (process.platform === 'win32') {
+    if (process.env.APPDATA) roots.push(path.join(process.env.APPDATA, 'npm', 'node_modules'));
+  } else {
+    roots.push('/usr/local/lib/node_modules');
+    roots.push('/opt/homebrew/lib/node_modules');
+    roots.push(path.join(os.homedir(), '.npm-global', 'lib', 'node_modules'));
+  }
+  return roots;
 }
 
 function kernelVersion() {
-  const root = npmRoot();
-  if (!root) return null;
-  const pkg = readJson(path.join(root, '@deepseek-ai', 'dsh', 'package.json'));
-  return pkg?.version ?? null;
+  for (const root of globalRoots()) {
+    const pkg = readJson(path.join(root, '@deepseek-ai', 'dsh', 'package.json'));
+    if (pkg?.version) return pkg.version;
+  }
+  return null;
 }
 
 function profileFacts(profile = 'web') {

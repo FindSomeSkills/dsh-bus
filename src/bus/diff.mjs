@@ -17,9 +17,17 @@ export function diffStates(local, peer) {
     else if (lp[name] !== pp[name]) push('plugin', name, lp[name], pp[name], '版本不同');
   }
 
-  const lb = JSON.stringify(local.profile?.bundles ?? []);
-  const pb = JSON.stringify(peer.profile?.bundles ?? []);
-  if (lb !== pb) push('bundles', 'profile.bundles', local.profile?.bundles ?? [], peer.profile?.bundles ?? [], 'bundles 顺序或条目不同');
+  const lb = local.profile?.bundles ?? [];
+  const pb = peer.profile?.bundles ?? [];
+  const lSet = new Set(lb);
+  const pSet = new Set(pb);
+  const sameSet = lb.length === pb.length && lb.every((b) => pSet.has(b)) && pb.every((b) => lSet.has(b));
+  const sameOrder = JSON.stringify(lb) === JSON.stringify(pb);
+  if (!sameSet) {
+    push('bundles', 'profile.bundles', lb, pb, 'bundles 条目不同：多一个或少一个都会让插件不加载');
+  } else if (!sameOrder) {
+    push('bundles', 'profile.bundles', lb, pb, '条目相同、顺序不同：只影响 patch 层叠加次序，通常无害');
+  }
 
   if (local.preset?.permission !== peer.preset?.permission) push('preset', 'permission', local.preset?.permission, peer.preset?.permission, '权限档位不同');
   if (local.preset?.preset !== peer.preset?.preset) push('preset', 'agent preset', local.preset?.preset, peer.preset?.preset, '默认预设不同');

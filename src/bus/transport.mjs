@@ -33,12 +33,14 @@ export function readIncoming(repo, device, { all = false } = {}) {
   const out = [];
   const busDir = path.join(repo, 'bus');
   if (!fs.existsSync(busDir)) return out;
+  const now = Date.now();
   for (const sender of fs.readdirSync(busDir)) {
     if (sender === device) continue;
     for (const file of listJson(path.join(busDir, sender))) {
       const msg = readAll(file);
       if (!msg) continue;
       if (msg.to !== device && msg.to !== '*') continue;
+      if (msg.expires_at && Date.parse(msg.expires_at) < now) continue;
       out.push({ ...msg, _file: path.relative(repo, file).split(path.sep).join('/') });
     }
   }
@@ -64,6 +66,29 @@ export function readAcks(repo, device) {
     }
   }
   return bySender;
+}
+
+// 我发出去的哪些被对端回执了：读 bus/<自己>/ 与 ack/<对端>/
+export function readReceipts(repo, device, { limit = 50 } = {}) {
+  const mine = path.join(repo, 'bus', device);
+  if (!fs.existsSync(mine)) return [];
+  const acks = readAcks(repo, device);
+  const out = [];
+  for (const file of listJson(mine).reverse()) {
+    const msg = readAll(file);
+    if (!msg) continue;
+    const ack = acks[msg.id];
+    out.push({
+      id: msg.id,
+      to: msg.to,
+      created_at: msg.created_at,
+      bytes: msg.body_bytes,
+      acked: Boolean(ack && ack.from === msg.to),
+      acked_at: ack && ack.from === msg.to ? ack.at : null,
+    });
+    if (out.length >= limit) break;
+  }
+  return out;
 }
 
 export function writeHeartbeat(repo, state) {
@@ -96,13 +121,20 @@ export function check(msg) {
 export function send(repo, cfg, { to, kind = 'prompt', body, replyTo = null, attachments = [], host = null, dryRun = false }) {
   const msg = buildMessage({ from: cfg.device, to, kind, body, replyTo, attachments, host });
   if (dryRun) return { status: 'dry-run', id: msg.id, bytes: msg.body_bytes };
+  return sendMessage(repo, cfg, msg);
+}
+
+// 已构造好的消息直接投递，避免 cli 里构造两次、id 对不上
+export function sendMessage(repo, cfg, msg) {
+  const problems = validateMessage(msg);
+  if (problems.length) throw new Error(`消息不合法：${problems.join('; ')}`);
 
   const unlock = git.lock(repo);
   try {
     // 离线也要能把消息写进本地仓库；pull 失败继续，等 push 决定是否需要排队
     try { git.pull(repo); } catch {}
     const rel = writeMessage(repo, msg);
-    git.commitAll(repo, `bus: ${cfg.device} -> ${to} ${msg.id.slice(-8)}`);
+    git.commitAll(repo, `bus: ${cfg.device} -> ${msg.to} ${msg.id.slice(-8)}`);
     const res = git.push(repo);
     if (!res.ok) {
       queueOutbox(cfg, msg);

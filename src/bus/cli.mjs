@@ -58,6 +58,18 @@ const commands = {
     if (!remote) throw new Error('init 需要 --repo <git 地址>');
     const device = slug(flags.device || defaultDevice());
     const repo = paths.repo;
+
+    // 已经指向一个仓库时，不偷偷换成新地址：那会让消息被推进另一个信箱
+    if (git.isRepo(repo)) {
+      const current = git.gitRun(repo, ['remote', 'get-url', 'origin']).out.trim();
+      if (current && current !== remote) {
+        throw new Error(
+          `本机已接入 ${current}，与 --repo 给的 ${remote} 不同。要换信箱先手动处理：` +
+            `git -C "${repo}" remote set-url origin ${remote}，或删掉 ${repo} 后重跑 init。`,
+        );
+      }
+    }
+
     git.ensureRepo(repo, remote);
     git.ensureIdentity(repo, device);
     writeConfig({ device, remote, repo, interval: Number(flags.interval ?? 15), createdAt: new Date().toISOString() });
@@ -77,13 +89,18 @@ const commands = {
     if (!to) throw new Error('send 需要 --to <设备名|*>');
     const body = bodyFrom(flags);
     const attachments = collectAttachments(flags.attach, flags['attach-blob']);
-    const msg = bus.compose({ from: cfg.device, to, kind: flags.kind || 'prompt', body, replyTo: flags['reply-to'] ?? null, attachments, host: { dsh: null, node: process.version, os: process.platform } });
-    const check = validateMessage(msg);
-    if (check.length) throw new Error(`消息不合法：${check.join('; ')}`);
     const blobs = attachments.filter((a) => a.buf);
     for (const b of blobs) writeBlob(cfg.repo, b.buf, b.entry.sha256);
-    const meta = attachments.map((a) => a.entry);
-    return bus.send(cfg.repo, cfg, { to, kind: msg.kind, body, replyTo: msg.reply_to, attachments: meta, host: msg.host });
+    const msg = bus.compose({
+      from: cfg.device,
+      to,
+      kind: flags.kind || 'prompt',
+      body,
+      replyTo: flags['reply-to'] ?? null,
+      attachments: attachments.map((a) => a.entry),
+      host: { dsh: null, node: process.version, os: process.platform },
+    });
+    return bus.sendMessage(cfg.repo, cfg, msg);
   },
 
   poll(flags) {
@@ -91,24 +108,33 @@ const commands = {
     const unlock = git.lock(cfg.repo);
     try {
       git.pull(cfg.repo);
-      bus.flushOutbox(cfg.repo, cfg);
+      const flushed = bus.flushOutbox(cfg.repo, cfg);
       const cursor = readCursor(cfg.device);
       const seen = new Set(cursor.seen);
       const all = bus.readIncoming(cfg.repo, cfg.device);
       const fresh = flags.all ? all : all.filter((m) => !seen.has(m.id));
-      const acks = bus.readAcks(cfg.repo, cfg.device);
-      for (const m of fresh) {
-        seen.add(m.id);
-        acks[m.id] = acks[m.id] ?? null;
-      }
-      writeCursor(cfg.device, { device: cfg.device, seen: [...seen].slice(-2000), lastCommit: git.head(cfg.repo), checkedAt: new Date().toISOString() });
+      for (const m of fresh) seen.add(m.id);
+      writeCursor(cfg.device, {
+        device: cfg.device,
+        seen: [...seen].slice(-2000),
+        lastCommit: git.head(cfg.repo),
+        checkedAt: new Date().toISOString(),
+      });
       const peer = bus.readHeartbeats(cfg.repo);
       const peerSeen = Object.fromEntries(
         Object.entries(peer)
           .filter(([device]) => device !== cfg.device)
           .map(([device, hb]) => [device, { at: hb.at, pid: hb.service?.pid ?? null, dsh: hb.host?.dsh ?? null }]),
       );
-      return { ok: true, device: cfg.device, count: fresh.length, messages: fresh, peers: peerSeen };
+      return {
+        ok: true,
+        device: cfg.device,
+        count: fresh.length,
+        messages: fresh,
+        flushed: flushed.flushed ?? 0,
+        receipts: bus.readReceipts(cfg.repo, cfg.device, { limit: 20 }),
+        peers: peerSeen,
+      };
     } finally {
       unlock();
     }
