@@ -1,0 +1,37 @@
+{
+  "name": "dsh-bus-cli",
+  "version": "0.3.0",
+  "private": false,
+  "type": "module",
+  "description": "Send prompts and replies between your own DSH machines through a private git repository",
+  "license": "MIT",
+  "bin": {
+    "dsh-bus": "bin/dsh-bus.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "files": [
+    "bin",
+    "src/bus",
+    "docs/bus"
+  ],
+  "scripts": {
+    "bus:test": "node --test test/bus.test.mjs"
+  },
+  "keywords": [
+    "dsh",
+    "deepseek-harness",
+    "sync",
+    "message-bus",
+    "cli"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/FindSomeSkills/dsh-bus.git"
+  },
+  "homepage": "https://www.dshtoolbox.com/guides/dsh-bus/",
+  "bugs": {
+    "url": "https://github.com/FindSomeSkills/dsh-bus/issues"
+  }
+}
