@@ -36,12 +36,12 @@ function out(value) {
   process.stdout.write(JSON.stringify(value, null, 2) + '\n');
 }
 
-function collectAttachments(meta, blobs) {
+function collectAttachments(meta, blobs, withPaths = false) {
   const list = [];
   const metaFiles = String(meta ?? '').split(',').filter(Boolean);
   const blobFiles = String(blobs ?? '').split(',').filter(Boolean);
-  for (const file of metaFiles) list.push(readAttachment(file, { blob: false }));
-  for (const file of blobFiles) list.push(readAttachment(file, { blob: true }));
+  for (const file of metaFiles) list.push(readAttachment(file, { blob: false, withPath: withPaths }));
+  for (const file of blobFiles) list.push(readAttachment(file, { blob: true, withPath: withPaths }));
   return list;
 }
 
@@ -50,6 +50,16 @@ function bodyFrom(flags) {
   if (typeof flags.text === 'string') return flags.text;
   if (flags.stdin) return fs.readFileSync(0, 'utf8');
   throw new Error('需要 --text、--file 或 --stdin');
+}
+
+// pull 失败不能装成“没有新消息”：把结果带回输出
+function pullSafe(repo) {
+  try {
+    const res = git.pull(repo);
+    return { ok: res.ok, error: res.ok ? null : (res.out || '').trim() };
+  } catch (error) {
+    return { ok: false, error: error.message };
+  }
 }
 
 const commands = {
@@ -88,7 +98,7 @@ const commands = {
     const to = String(flags.to || '');
     if (!to) throw new Error('send 需要 --to <设备名|*>');
     const body = bodyFrom(flags);
-    const attachments = collectAttachments(flags.attach, flags['attach-blob']);
+    const attachments = collectAttachments(flags.attach, flags['attach-blob'], Boolean(flags['with-paths']));
     const blobs = attachments.filter((a) => a.buf);
     for (const b of blobs) writeBlob(cfg.repo, b.buf, b.entry.sha256);
     const msg = bus.compose({
@@ -107,7 +117,7 @@ const commands = {
     const cfg = requireConfig();
     const unlock = git.lock(cfg.repo);
     try {
-      git.pull(cfg.repo);
+      const pull = pullSafe(cfg.repo);
       const flushed = bus.flushOutbox(cfg.repo, cfg);
       const cursor = readCursor(cfg.device);
       const seen = new Set(cursor.seen);
@@ -131,6 +141,8 @@ const commands = {
         device: cfg.device,
         count: fresh.length,
         messages: fresh,
+        stale: !pull.ok,
+        pullError: pull.error,
         flushed: flushed.flushed ?? 0,
         receipts: bus.readReceipts(cfg.repo, cfg.device, { limit: 20 }),
         peers: peerSeen,
@@ -180,12 +192,12 @@ const commands = {
     const cfg = requireConfig();
     const unlock = git.lock(cfg.repo);
     try {
-      git.pull(cfg.repo);
+      const pull = pullSafe(cfg.repo);
       const beats = bus.readHeartbeats(cfg.repo);
       const local = beats[cfg.device] ?? collectState({ device: cfg.device });
       const peerName = flags.with ? String(flags.with) : Object.keys(beats).find((d) => d !== cfg.device);
       if (!peerName || !beats[peerName]) return { ok: false, reason: '对端还没有 heartbeat，先在另一端跑一次 heartbeat', devices: Object.keys(beats) };
-      return { ok: true, local: cfg.device, peer: peerName, ...diffStates(local, beats[peerName]) };
+      return { ok: true, local: cfg.device, peer: peerName, stale: !pull.ok, pullError: pull.error, ...diffStates(local, beats[peerName]) };
     } finally {
       unlock();
     }
@@ -193,10 +205,12 @@ const commands = {
 
   devices() {
     const cfg = requireConfig();
-    git.pull(cfg.repo);
+    const pull = pullSafe(cfg.repo);
     const beats = bus.readHeartbeats(cfg.repo);
     return {
       ok: true,
+      stale: !pull.ok,
+      pullError: pull.error,
       self: cfg.device,
       devices: Object.entries(beats).map(([device, hb]) => ({
         device,
@@ -228,7 +242,7 @@ const commands = {
     const name = String(flags.name || '');
     const outPath = String(flags.out || '');
     if (!outPath) throw new Error('get 需要 --out <本地路径>');
-    git.pull(cfg.repo);
+    const pull = pullSafe(cfg.repo);
     const all = bus.readIncoming(cfg.repo, cfg.device, { all: true });
     const msg = all.find((m) => m.id === id);
     if (!msg) throw new Error('找不到这条消息');
@@ -253,7 +267,7 @@ export function main(argv = process.argv.slice(2)) {
     out({
       usage: [
         'dsh-bus init --repo <git 地址> [--device 名字]',
-        'dsh-bus send --to <设备|*> (--text 文本 | --file 路径 | --stdin) [--kind] [--reply-to id] [--attach 路径] [--attach-blob 路径]',
+        'dsh-bus send --to <设备|*> (--text 文本 | --file 路径 | --stdin) [--kind] [--reply-to id] [--attach 路径] [--attach-blob 路径] [--with-paths]',
         'dsh-bus get <id> --out <本地路径> [--name 附件名]',
         'dsh-bus poll [--all]',
         'dsh-bus ack <id>',

@@ -31,7 +31,7 @@
 # 1) 从 npm 装（推荐，之后 dsh-bus 直接可用）
 npm install -g dsh-bus-cli
 
-# 2) 用发布包（不想装全局包时）：下载 dsh-bus-0.3.1.zip 解压，在解压目录里跑
+# 2) 用发布包（不想装全局包时）：下载 dsh-bus-0.3.2.zip 解压，在解压目录里跑
 node bin/dsh-bus.mjs init --repo https://github.com/你的用户名/dsh-bus-data.git --device mac-mini
 
 # 3) 从源码

@@ -1,6 +1,6 @@
 {
   "name": "dsh-bus-cli",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "private": false,
   "type": "module",
   "description": "Send prompts and replies between your own DSH machines through a private git repository",

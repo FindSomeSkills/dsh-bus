@@ -4,12 +4,13 @@ import crypto from 'node:crypto';
 
 const MAX_BLOB = 256 * 1024;
 
-export function readAttachment(file, { blob = false } = {}) {
+export function readAttachment(file, { blob = false, withPath = false } = {}) {
   const abs = path.resolve(file);
   if (!fs.existsSync(abs)) throw new Error(`附件不存在：${file}`);
   const buf = fs.readFileSync(abs);
   const sha256 = crypto.createHash('sha256').update(buf).digest('hex');
-  const entry = { name: path.basename(abs), path_hint: abs, sha256, size: buf.length };
+  const entry = { name: path.basename(abs), sha256, size: buf.length };
+  if (withPath) entry.path_hint = abs;
   if (!blob) return { entry, buf: null };
   if (buf.length > MAX_BLOB) {
     throw new Error(`附件 ${entry.name} 有 ${buf.length} 字节，超过 256 KB 内联上限；去掉 --attach-blob 只发元数据，或先压缩/拆分`);
